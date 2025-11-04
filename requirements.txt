@@ -1,13 +1,27 @@
+# 🐍 DEPENDENCIAS PRINCIPALES DE FLASK
 Flask==3.1.1
 SQLAlchemy==2.0.42
 flask_apscheduler==1.13.1
 python-dotenv==1.1.1
+
+# 🗄️ CONECTORES DE BASE DE DATOS
 pymysql==1.1.1
-psycopg2-binary
+psycopg2-binary==2.9.10
+
+# 📊 MONITOREO Y MÉTRICAS
 psutil==7.0.0
-eventlet
-flask_socketio
-pytz
-requests
-#icapclient3
-uvicorn
+
+# 🔌 WEBSOCKETS Y TIEMPO REAL
+eventlet==0.33.3
+flask_socketio==5.3.6
+
+# 🌐 UTILIDADES
+pytz==2024.1
+requests==2.32.3
+
+# 🚀 SERVIDOR PRODUCCIÓN
+gunicorn==21.2.0
+uvicorn==0.30.1
+
+# 🔍 CLIENTE ICAP (OPCIONAL)
+# icapclient3
