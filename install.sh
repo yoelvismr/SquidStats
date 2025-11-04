@@ -650,7 +650,8 @@ function uninstallSquidStats() {
 # =============================================
 
 function cloneNewInstallation() {
-    local repo_url="https://github.com/kaelthasmanu/SquidStats.git"
+    # local repo_url="https://github.com/kaelthasmanu/SquidStats.git"
+    local repo_url="https://github.com/yoelvismr/SquidStats"
     local branch="main"
 
     # Verificar si ya existe alguna instalación
