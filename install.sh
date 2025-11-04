@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/bin/bash
 
 # =============================================
 # FUNCIONES DE UTILIDAD PARA MENSAJES
@@ -18,58 +18,8 @@ function info() {
 
 function checkSudo() {
     if [ "$EUID" -ne 0 ]; then
-        error "ERROR: Este script debe ejecutarse con privilegios de superusuario."
+        error "ERROR: Este script debe ejecutarse con privilegios de superusuario.\nPor favor, ejecútelo con el usuario: root $0"
         exit 1
-    fi
-}
-
-# =============================================
-# 🆕 CONFIGURACIÓN DE PROXY PARA PIP
-# =============================================
-
-function setupPipProxy() {
-    local proxy_url="$1"
-    
-    if [ -n "$proxy_url" ]; then
-        echo "🔌 Configurando proxy para pip: $proxy_url"
-        export PIP_PROXY="$proxy_url"
-        
-        # Crear archivo de configuración de pip
-        mkdir -p /root/.config/pip
-        cat > /root/.config/pip/pip.conf << EOF
-[global]
-proxy = $proxy_url
-trusted-host = pypi.org pypi.python.org files.pythonhosted.org
-timeout = 60
-retries = 3
-EOF
-        ok "Proxy configurado para pip"
-    else
-        echo "🌐 Sin proxy - conexión directa"
-        # Limpiar configuración previa
-        rm -f /root/.config/pip/pip.conf
-    fi
-}
-
-function askForProxy() {
-    echo "🔍 Configuración de red detectada:"
-    echo "   Git funciona ✓"
-    echo "   Pip falla ✗ (necesita proxy)"
-    echo ""
-    echo "¿Estás detrás de un proxy corporativo?"
-    echo "Ejemplos:"
-    echo "  http://ip_proxy:3128"
-    echo "  http://usuario:contraseña@ip_proxy:3128"
-    echo "  o dejar vacío para sin proxy"
-    echo ""
-    read -p "🔧 URL del proxy (o Enter para sin proxy): " proxy_input
-    
-    if [ -n "$proxy_input" ]; then
-        setupPipProxy "$proxy_input"
-        return 0
-    else
-        setupPipProxy ""
-        return 0
     fi
 }
 
@@ -79,7 +29,6 @@ function askForProxy() {
 
 function showWelcome() {
     info "🚀 INSTALADOR DE SQUIDSTATS - MODO PRODUCCIÓN"
-    echo "Este script instalará SquidStats en modo producción"
     echo "Este script instalará SquidStats en modo producción con:"
     echo "  • Nginx como proxy reverso"
     echo "  • Gunicorn como servidor de aplicación"
@@ -90,65 +39,108 @@ function showWelcome() {
     echo ""
 }
 
-function installDependencies() {
-    local venv_dir="/opt/SquidStats/venv"
+function cloneOrUpdateRepo() {
+    local repo_url="https://github.com/yoelvismr/SquidStats.git"
+    local branch="main"
+    local target_dir="/opt/SquidStats"
 
-    if [ ! -d "$venv_dir" ]; then
-        echo "Creando entorno virtual..."
-        python3 -m venv "$venv_dir" || {
-            error "Error creando entorno virtual"
+    if [ -d "$target_dir" ]; then
+        echo "Actualizando instalación existente..."
+        cd "$target_dir"
+        
+        # Preservar configuración existente
+        if [ -f ".env" ]; then
+            cp .env /tmp/squidstats_env_backup
+            echo "Configuración .env preservada"
+        fi
+
+        if git pull origin "$branch"; then
+            [ -f "/tmp/squidstats_env_backup" ] && mv /tmp/squidstats_env_backup .env
+            ok "Repositorio actualizado"
+            return 0
+        else
+            error "Error al actualizar el repositorio"
             return 1
-        }
-        ok "Entorno virtual creado"
-    fi
-
-    echo "Instalando dependencias..."
-    source "$venv_dir/bin/activate"
-
-    # 🆕 ESTRATEGIA INTELIGENTE PARA PIP
-    echo "🔧 Configurando pip..."
-    
-    # Opción 1: Con proxy si está configurado
-    if [ -n "$PIP_PROXY" ]; then
-        echo "📡 Usando proxy: $PIP_PROXY"
-        pip install --proxy "$PIP_PROXY" --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org --upgrade pip || {
-            echo "⚠️  Falló con proxy, intentando sin proxy..."
-            pip install --upgrade pip
-        }
+        fi
     else
-        # Opción 2: Sin proxy
-        pip install --upgrade pip
-    fi
-
-    # Instalar dependencias con estrategia similar
-    echo "📦 Instalando paquetes desde requirements.txt..."
-    
-    if [ -n "$PIP_PROXY" ]; then
-        pip install --proxy "$PIP_PROXY" --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r /opt/SquidStats/requirements.txt || {
-            echo "⚠️  Falló con proxy, intentando sin proxy..."
-            pip install -r /opt/SquidStats/requirements.txt
-        }
-    else
-        pip install -r /opt/SquidStats/requirements.txt
-    fi
-
-    if [ $? -eq 0 ]; then
-        ok "✅ Dependencias instaladas correctamente"
-        deactivate
-        return 0
-    else
-        error "❌ Error crítico instalando dependencias"
-        echo "💡 Soluciones:"
-        echo "   1. Verificar conexión a internet"
-        echo "   2. Configurar proxy correctamente"
-        echo "   3. Instalar dependencias manualmente"
-        deactivate
-        return 1
+        echo "Clonando repositorio en $target_dir..."
+        if git clone "$repo_url" "$target_dir"; then
+            cd "$target_dir"
+            git checkout "$branch"
+            
+            # Verificar que se clonó correctamente
+            if [ -f "requirements.txt" ]; then
+                ok "Repositorio clonado correctamente"
+                echo "Contenido del repositorio clonado:"
+                ls -la "$target_dir"
+                return 0
+            else
+                error "ERROR: El repositorio se clonó pero no contiene requirements.txt"
+                echo "Contenido del directorio:"
+                ls -la "$target_dir"
+                return 1
+            fi
+        else
+            error "Error al clonar el repositorio"
+            return 1
+        fi
     fi
 }
 
+function installDependencies() {
+    local venv_dir="/opt/SquidStats/venv"
+    local requirements_file="/opt/SquidStats/requirements.txt"
+
+    # Verificar que requirements.txt existe ANTES de crear el entorno virtual
+    if [ ! -f "$requirements_file" ]; then
+        error "ERROR: No se encontró $requirements_file"
+        error "El repositorio no se clonó correctamente"
+        return 1
+    fi
+
+    echo "Creando entorno virtual en $venv_dir..."
+    python3 -m venv "$venv_dir"
+    
+    if [ $? -ne 0 ]; then
+        error "Error al crear el entorno virtual"
+        return 1
+    fi
+    ok "Entorno virtual creado"
+
+    echo "Instalando dependencias desde $requirements_file..."
+    source "$venv_dir/bin/activate"
+    
+    # Actualizar pip primero
+    pip install --upgrade pip
+    
+    # Verificar conexión a internet antes de instalar
+    echo "Verificando conexión a internet..."
+    if ! ping -c 1 -W 3 pypi.org &> /dev/null; then
+        error "ERROR: Sin conexión a internet. No se pueden instalar dependencias."
+        deactivate
+        return 1
+    fi
+
+    echo "Instalando dependencias, esto puede tomar unos minutos..."
+    pip install -r "$requirements_file"
+
+    if [ $? -ne 0 ]; then
+        error "Error al instalar dependencias"
+        deactivate
+        return 1
+    fi
+
+    # Verificar que las dependencias principales se instalaron
+    echo "Verificando instalación de dependencias..."
+    pip list | grep -E "(flask|gunicorn|sqlalchemy)"
+
+    ok "Dependencias instaladas correctamente"
+    deactivate
+    return 0
+}
+
 function checkPackages() {
-    local packages=("python3" "python3-pip" "python3-venv" "nginx" "git")
+    local packages=("git" "python3" "python3-pip" "python3-venv" "curl" "build-essential" "libssl-dev" "python3-dev" "nginx")
     local missing=()
 
     for pkg in "${packages[@]}"; do
@@ -158,61 +150,28 @@ function checkPackages() {
     done
 
     if [ ${#missing[@]} -ne 0 ]; then
-        echo "Instalando paquetes del sistema: ${missing[*]}"
+        echo "Instalando paquetes faltantes: ${missing[*]}"
         apt-get update
         apt-get install -y "${missing[@]}" || {
-            error "Error instalando paquetes del sistema"
-            return 1
+            error "ERROR: No se pudieron instalar los paquetes"
+            exit 1
         }
-        ok "Paquetes del sistema instalados"
+        ok "Paquetes instalados"
     else
-        echo "✅ Paquetes del sistema OK"
-    fi
-}
-
-function cloneOrUpdateRepo() {
-    local repo_url="https://github.com/kaelthasmanu/SquidStats.git"
-    local branch="main"
-
-    if [ -d "/opt/SquidStats" ]; then
-        echo "🔄 Actualizando código existente..."
-        cd /opt/SquidStats
-        
-        if [ -f ".env" ]; then
-            cp .env /tmp/squidstats_env_backup
-            echo "⚙️  Configuración .env preservada"
-        fi
-
-        if git pull origin "$branch"; then
-            [ -f "/tmp/squidstats_env_backup" ] && mv /tmp/squidstats_env_backup .env
-            ok "✅ Código actualizado"
-            return 0
-        else
-            error "❌ Error actualizando código"
-            return 1
-        fi
-    else
-        echo "📥 Clonando repositorio..."
-        if git clone "$repo_url" /opt/SquidStats; then
-            cd /opt/SquidStats
-            git checkout "$branch"
-            ok "✅ Repositorio clonado"
-            return 0
-        else
-            error "❌ Error clonando repositorio"
-            return 1
-        fi
+        echo "Todos los paquetes necesarios están instalados"
     fi
 }
 
 function checkSquidLog() {
     local log_file="/var/log/squid/access.log"
     if [ ! -f "$log_file" ]; then
-        echo "⚠️  No se encontró log de Squid en $log_file"
-        echo "   Esto es normal si Squid no está instalado"
+        error "¡ADVERTENCIA!: No se encontró el log de Squid en $log_file"
+        echo "Puede crear el archivo manualmente con:"
+        echo "sudo touch /var/log/squid/access.log"
+        echo "sudo chown proxy:proxy /var/log/squid/access.log"
         return 1
     else
-        echo "✅ Log de Squid encontrado"
+        echo "Log de Squid encontrado: $log_file"
         return 0
     fi
 }
@@ -221,11 +180,11 @@ function createProductionEnv() {
     local env_file="/opt/SquidStats/.env"
 
     if [ -f "$env_file" ]; then
-        echo "⚙️  Manteniendo configuración existente"
+        echo "Manteniendo configuración .env existente"
         return 0
     fi
 
-    echo "📝 Creando configuración de producción..."
+    echo "Creando configuración de producción..."
     cat >"$env_file" <<EOF
 # =============================================
 # CONFIGURACIÓN DE PRODUCCIÓN
@@ -249,17 +208,18 @@ ACL_FILES_DIR=/etc/squid/config/acls
 LOG_FILE=/var/log/squidstats/app.log
 EOF
 
+    # Crear directorios de producción
     mkdir -p /var/lib/squidstats /var/log/squidstats
     chown -R proxy:proxy /var/lib/squidstats /var/log/squidstats 2>/dev/null || true
     
-    ok "✅ Configuración creada"
+    ok "Configuración de producción creada"
 }
 
 function setupNginx() {
-    echo "🌐 Configurando Nginx..."
+    echo "Configurando Nginx..."
     
     if ! command -v nginx &> /dev/null; then
-        echo "📦 Instalando Nginx..."
+        echo "Instalando Nginx..."
         apt-get install -y nginx
     fi
 
@@ -313,9 +273,9 @@ EOF
     if nginx -t; then
         systemctl reload nginx
         systemctl enable nginx
-        ok "✅ Nginx configurado"
+        ok "Nginx configurado"
     else
-        error "❌ Error en configuración de Nginx"
+        error "Error en configuración de Nginx"
         return 1
     fi
 }
@@ -324,12 +284,12 @@ function createService() {
     local service_file="/etc/systemd/system/squidstats.service"
 
     if [ -f "$service_file" ]; then
-        echo "🔄 Reiniciando servicio existente..."
+        echo "Servicio ya existe, reiniciando..."
         systemctl restart squidstats.service
         return 0
     fi
 
-    echo "⚙️  Creando servicio systemd..."
+    echo "Creando servicio systemd..."
     cat >"$service_file" <<EOF
 [Unit]
 Description=SquidStats Web Application
@@ -365,86 +325,147 @@ EOF
 
     systemctl daemon-reload
     systemctl enable squidstats.service
-    systemctl start squidstats.service
     
-    ok "✅ Servicio creado e iniciado"
+    # Verificar que el servicio puede iniciarse
+    if systemctl start squidstats.service; then
+        sleep 2
+        if systemctl is-active --quiet squidstats.service; then
+            ok "Servicio creado e iniciado correctamente"
+        else
+            error "El servicio se inició pero no está activo"
+            journalctl -u squidstats.service -n 20 --no-pager
+            return 1
+        fi
+    else
+        error "Error al iniciar el servicio"
+        journalctl -u squidstats.service -n 20 --no-pager
+        return 1
+    fi
 }
 
 function uninstallSquidStats() {
     echo -e "\n\033[1;43mDESINSTALACIÓN DE SQUIDSTATS\033[0m"
-    read -p "¿Está seguro? (s/N): " confirm
+    echo "¿Está seguro de que desea continuar? (s/N)"
+    read -p "Respuesta: " confirm
 
     if [[ ! "$confirm" =~ ^[sS]$ ]]; then
         echo "Desinstalación cancelada."
         return 0
     fi
 
-    echo "🗑️  Desinstalando..."
+    echo "Desinstalando..."
     
-    systemctl stop squidstats.service 2>/dev/null
-    systemctl disable squidstats.service 2>/dev/null
-    rm -f "/etc/systemd/system/squidstats.service"
-    systemctl daemon-reload
+    if [ -f "/etc/systemd/system/squidstats.service" ]; then
+        systemctl stop squidstats.service
+        systemctl disable squidstats.service
+        rm -f "/etc/systemd/system/squidstats.service"
+        systemctl daemon-reload
+        echo "Servicio eliminado"
+    fi
     
-    [ -d "/opt/SquidStats" ] && rm -rf "/opt/SquidStats"
-    [ -d "/var/lib/squidstats" ] && rm -rf "/var/lib/squidstats"
-    [ -d "/var/log/squidstats" ] && rm -rf "/var/log/squidstats"
+    [ -d "/opt/SquidStats" ] && rm -rf "/opt/SquidStats" && echo "Directorio de aplicación eliminado"
+    [ -d "/var/lib/squidstats" ] && rm -rf "/var/lib/squidstats" && echo "Datos eliminados"
+    [ -d "/var/log/squidstats" ] && rm -rf "/var/log/squidstats" && echo "Logs eliminados"
     
     if [ -f "/etc/nginx/sites-enabled/squidstats" ]; then
         rm -f "/etc/nginx/sites-enabled/squidstats"
         rm -f "/etc/nginx/sites-available/squidstats"
         systemctl reload nginx
+        echo "Configuración Nginx eliminada"
     fi
 
-    ok "✅ SquidStats desinstalado completamente"
+    ok "SquidStats desinstalado completamente"
 }
 
 function main() {
     checkSudo
     showWelcome
-    
-    # 🆕 DETECCIÓN INTERACTIVA DE PROXY
-    askForProxy
 
     if [ "$1" = "--update" ]; then
-        echo "🔄 Actualizando..."
+        echo "🔄 Actualizando SquidStats..."
         checkPackages
-        installDependencies
-        cloneOrUpdateRepo
+        cloneOrUpdateRepo || exit 1
+        installDependencies || exit 1
         systemctl restart squidstats.service
-        ok "✅ Actualización completada"
+        ok "Actualización completada! Acceda en: http://$(hostname -I | awk '{print $1}')"
 
     elif [ "$1" = "--uninstall" ]; then
         uninstallSquidStats
 
     else
-        echo "🚀 Iniciando instalación..."
+        echo "🚀 Instalando SquidStats en producción..."
+        
+        # ORDEN CORRECTO:
+        # 1. Verificar paquetes del sistema
         checkPackages
-        cloneOrUpdateRepo || exit 1
-        checkSquidLog
-        installDependencies || {
-            error "❌ No se puede continuar - dependencias fallaron"
+        
+        # 2. Clonar/actualizar el repositorio PRIMERO
+        echo "📥 Paso 1: Obteniendo código fuente..."
+        cloneOrUpdateRepo || {
+            error "Fallo al obtener el código fuente. Abortando."
             exit 1
         }
+        
+        # 3. Verificar logs de Squid
+        echo "📋 Paso 2: Verificando configuración..."
+        checkSquidLog
+        
+        # 4. Crear entorno virtual e instalar dependencias
+        echo "🐍 Paso 3: Configurando Python y dependencias..."
+        installDependencies || {
+            error "Fallo al instalar dependencias. Abortando."
+            exit 1
+        }
+        
+        # 5. Configurar entorno
+        echo "⚙️  Paso 4: Configurando aplicación..."
         createProductionEnv
-        setupNginx
-        createService
+        
+        # 6. Configurar Nginx
+        echo "🌐 Paso 5: Configurando Nginx..."
+        setupNginx || {
+            error "Fallo al configurar Nginx. Abortando."
+            exit 1
+        }
+        
+        # 7. Crear servicio
+        echo "🔧 Paso 6: Configurando servicio..."
+        createService || {
+            error "Fallo al configurar el servicio. Abortando."
+            exit 1
+        }
 
         ok "🎉 Instalación completada!"
+        echo ""
         echo "🌐 Acceda en: http://$(hostname -I | awk '{print $1}')"
-        echo "📊 Nginx: puerto 80"
-        echo "🔧 Gunicorn: puerto 5000"
-        echo "📝 Logs: /var/log/squidstats/"
+        echo "📊 Nginx escuchando en puerto 80"
+        echo "🔧 Gunicorn ejecutándose en puerto 5000"
+        echo "📝 Logs de aplicación en: /var/log/squidstats/"
+        echo "📋 Logs del servicio: journalctl -u squidstats.service -f"
+        echo ""
+        echo "Para ver el estado del servicio: systemctl status squidstats.service"
     fi
 }
 
+# =============================================
+# MANEJO DE PARÁMETROS
+# =============================================
+
 case "$1" in
-"--update") main "$1" ;;
-"--uninstall") main "$1" ;;
-"") main ;;
-*) 
+"--update")
+    main "$1"
+    ;;
+"--uninstall")
+    main "$1"
+    ;;
+"")
+    main
+    ;;
+*)
     echo "Uso: $0 [--update|--uninstall]"
-    echo "  El script detectará automáticamente si necesitas proxy"
+    echo "  Sin parámetros: Instala en producción"
+    echo "  --update: Actualiza instalación existente"
+    echo "  --uninstall: Desinstala completamente"
     exit 1
     ;;
 esac
