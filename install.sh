@@ -39,90 +39,24 @@ function showWelcome() {
     echo ""
 }
 
-function cloneOrUpdateRepo() {
-    local repo_url="https://github.com/yoelvismr/SquidStats.git"
-    local branch="main"
-    local target_dir="/opt/SquidStats"
-
-    if [ -d "$target_dir" ]; then
-        echo "Actualizando instalación existente..."
-        cd "$target_dir"
-        
-        # Preservar configuración existente
-        if [ -f ".env" ]; then
-            cp .env /tmp/squidstats_env_backup
-            echo "Configuración .env preservada"
-        fi
-
-        if git pull origin "$branch"; then
-            [ -f "/tmp/squidstats_env_backup" ] && mv /tmp/squidstats_env_backup .env
-            ok "Repositorio actualizado"
-            return 0
-        else
-            error "Error al actualizar el repositorio"
-            return 1
-        fi
-    else
-        echo "Clonando repositorio en $target_dir..."
-        if git clone "$repo_url" "$target_dir"; then
-            cd "$target_dir"
-            git checkout "$branch"
-            
-            # Verificar que se clonó correctamente
-            if [ -f "requirements.txt" ]; then
-                ok "Repositorio clonado correctamente"
-                echo "Contenido del repositorio clonado:"
-                ls -la "$target_dir"
-                return 0
-            else
-                error "ERROR: El repositorio se clonó pero no contiene requirements.txt"
-                echo "Contenido del directorio:"
-                ls -la "$target_dir"
-                return 1
-            fi
-        else
-            error "Error al clonar el repositorio"
-            return 1
-        fi
-    fi
-}
-
 function installDependencies() {
     local venv_dir="/opt/SquidStats/venv"
-    local requirements_file="/opt/SquidStats/requirements.txt"
 
-    # Verificar que requirements.txt existe ANTES de crear el entorno virtual
-    if [ ! -f "$requirements_file" ]; then
-        error "ERROR: No se encontró $requirements_file"
-        error "El repositorio no se clonó correctamente"
-        return 1
+    if [ ! -d "$venv_dir" ]; then
+        echo "Creando entorno virtual en $venv_dir..."
+        python3 -m venv "$venv_dir"
+        
+        if [ $? -ne 0 ]; then
+            error "Error al crear el entorno virtual"
+            return 1
+        fi
+        ok "Entorno virtual creado"
     fi
 
-    echo "Creando entorno virtual en $venv_dir..."
-    python3 -m venv "$venv_dir"
-    
-    if [ $? -ne 0 ]; then
-        error "Error al crear el entorno virtual"
-        return 1
-    fi
-    ok "Entorno virtual creado"
-
-    echo "Instalando dependencias desde $requirements_file..."
+    echo "Instalando dependencias..."
     source "$venv_dir/bin/activate"
-    
-    # Actualizar pip primero
     pip install --upgrade pip
-    
-    # Verificar conexión a internet antes de instalar
-    echo "Verificando conexión a internet..."
-    if ! ping -c 1 -W 3 pypi.org &> /dev/null; then
-        error "ERROR: Sin conexión a internet. No se pueden instalar dependencias."
-        deactivate
-        return 1
-    fi
-
-    echo "Instalando dependencias, esto puede tomar unos minutos..."
-    pip install -r "$requirements_file"
+    pip install -r /opt/SquidStats/requirements.txt
 
     if [ $? -ne 0 ]; then
         error "Error al instalar dependencias"
@@ -130,17 +64,13 @@ function installDependencies() {
         return 1
     fi
 
-    # Verificar que las dependencias principales se instalaron
-    echo "Verificando instalación de dependencias..."
-    pip list | grep -E "(flask|gunicorn|sqlalchemy)"
-
     ok "Dependencias instaladas correctamente"
     deactivate
     return 0
 }
 
 function checkPackages() {
-    local packages=("git" "python3" "python3-pip" "python3-venv" "curl" "build-essential" "libssl-dev" "python3-dev" "nginx")
+    local packages=("git" "python3" "python3-pip" "python3-venv" "libmariadb-dev" "curl" "build-essential" "libssl-dev" "libicapapi-dev" "python3-dev" "libpq-dev" "nginx")
     local missing=()
 
     for pkg in "${packages[@]}"; do
@@ -173,6 +103,51 @@ function checkSquidLog() {
     else
         echo "Log de Squid encontrado: $log_file"
         return 0
+    fi
+}
+
+function cloneOrUpdateRepo() {
+    # CORREGIDO: Usar el repositorio correcto
+    local repo_url="https://github.com/kaelthasmanu/SquidStats.git"
+    local branch="main"
+    local target_dir="/opt/SquidStats"
+
+    if [ -d "$target_dir" ]; then
+        echo "Actualizando instalación existente..."
+        cd "$target_dir"
+        
+        # Preservar configuración existente
+        if [ -f ".env" ]; then
+            cp .env /tmp/squidstats_env_backup
+            echo "Configuración .env preservada"
+        fi
+
+        if git pull origin "$branch"; then
+            [ -f "/tmp/squidstats_env_backup" ] && mv /tmp/squidstats_env_backup .env
+            ok "Repositorio actualizado"
+            return 0
+        else
+            error "Error al actualizar el repositorio"
+            return 1
+        fi
+    else
+        echo "Clonando repositorio en $target_dir..."
+        if git clone "$repo_url" "$target_dir"; then
+            cd "$target_dir"
+            git checkout "$branch"
+            
+            # Verificar que se clonó correctamente
+            if [ -f "requirements.txt" ]; then
+                ok "Repositorio clonado correctamente"
+                return 0
+            else
+                error "ERROR: El repositorio se clonó pero no contiene requirements.txt"
+                return 1
+            fi
+        else
+            error "Error al clonar el repositorio"
+            return 1
+        fi
     fi
 }
 
@@ -325,22 +300,9 @@ EOF
 
     systemctl daemon-reload
     systemctl enable squidstats.service
+    systemctl start squidstats.service
     
-    # Verificar que el servicio puede iniciarse
-    if systemctl start squidstats.service; then
-        sleep 2
-        if systemctl is-active --quiet squidstats.service; then
-            ok "Servicio creado e iniciado correctamente"
-        else
-            error "El servicio se inició pero no está activo"
-            journalctl -u squidstats.service -n 20 --no-pager
-            return 1
-        fi
-    else
-        error "Error al iniciar el servicio"
-        journalctl -u squidstats.service -n 20 --no-pager
-        return 1
-    fi
+    ok "Servicio creado e iniciado"
 }
 
 function uninstallSquidStats() {
@@ -394,56 +356,19 @@ function main() {
 
     else
         echo "🚀 Instalando SquidStats en producción..."
-        
-        # ORDEN CORRECTO:
-        # 1. Verificar paquetes del sistema
         checkPackages
-        
-        # 2. Clonar/actualizar el repositorio PRIMERO
-        echo "📥 Paso 1: Obteniendo código fuente..."
-        cloneOrUpdateRepo || {
-            error "Fallo al obtener el código fuente. Abortando."
-            exit 1
-        }
-        
-        # 3. Verificar logs de Squid
-        echo "📋 Paso 2: Verificando configuración..."
+        cloneOrUpdateRepo || exit 1
         checkSquidLog
-        
-        # 4. Crear entorno virtual e instalar dependencias
-        echo "🐍 Paso 3: Configurando Python y dependencias..."
-        installDependencies || {
-            error "Fallo al instalar dependencias. Abortando."
-            exit 1
-        }
-        
-        # 5. Configurar entorno
-        echo "⚙️  Paso 4: Configurando aplicación..."
+        installDependencies || exit 1
         createProductionEnv
-        
-        # 6. Configurar Nginx
-        echo "🌐 Paso 5: Configurando Nginx..."
-        setupNginx || {
-            error "Fallo al configurar Nginx. Abortando."
-            exit 1
-        }
-        
-        # 7. Crear servicio
-        echo "🔧 Paso 6: Configurando servicio..."
-        createService || {
-            error "Fallo al configurar el servicio. Abortando."
-            exit 1
-        }
+        setupNginx
+        createService
 
-        ok "🎉 Instalación completada!"
-        echo ""
+        ok "Instalación completada!"
         echo "🌐 Acceda en: http://$(hostname -I | awk '{print $1}')"
-        echo "📊 Nginx escuchando en puerto 80"
-        echo "🔧 Gunicorn ejecutándose en puerto 5000"
-        echo "📝 Logs de aplicación en: /var/log/squidstats/"
-        echo "📋 Logs del servicio: journalctl -u squidstats.service -f"
-        echo ""
-        echo "Para ver el estado del servicio: systemctl status squidstats.service"
+        echo "📊 Nginx en puerto 80"
+        echo "🔧 Gunicorn en puerto 5000"
+        echo "📝 Logs en: /var/log/squidstats/"
     fi
 }
 
